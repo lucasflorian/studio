@@ -12,49 +12,60 @@
 }
 
 .App .Toastify__toast-container--top-right {
-    top: 4em;
+    top: 72px;
+}
+
+.App .Toastify__toast {
+    border-radius: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    box-shadow: 0 10px 30px rgba(20, 22, 50, .15);
 }
 
 .App-header {
-    background-color: #282c34;
+    position: relative;
+    z-index: 20;
     display: flex;
-    flex-direction: row;
-    flex-grow: 0;
-    flex-shrink: 0;
     align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
-    height: 48px;
+    gap: 24px;
+    flex-shrink: 0;
+    height: 60px;
+    padding: 0 24px;
+    background: #ffffff;
+    border-bottom: 1px solid #e6e7f0;
+    box-shadow: 0 1px 8px rgba(20, 22, 50, .04);
+    color: #1d1e2c;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
 }
 
-.App-header .flags {
-}
+.App-brand { display: flex; align-items: center; gap: 8px; }
+.App-logo { width: 34px; height: 34px; display: block; }
+.App-name { font-weight: 800; font-size: 18px; letter-spacing: -.01em; }
+.App-version { font-size: 11px; font-weight: 700; color: #6d5dfc; background: #eeebff; padding: 2px 8px; border-radius: 99px; }
 
-.App-header .flags span {
+.App-tabs { display: flex; gap: 4px; padding: 4px; background: #f4f5fa; border-radius: 999px; }
+.App-tab {
+    height: 34px; padding: 0 16px;
+    border: none; border-radius: 999px;
+    background: transparent;
+    color: #5d6075; font-weight: 600; font-size: 14px;
     cursor: pointer;
 }
+.App-tab:hover { color: #1d1e2c; }
+.App-tab.active { background: #ffffff; color: #1d1e2c; box-shadow: 0 1px 3px rgba(20, 22, 50, .12); }
 
-.App-header .welcome {
-    flex-grow: 1;
+.App-tools { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.App-lang {
+    height: 30px; padding: 0 10px;
+    border: none; border-radius: 8px; background: transparent;
+    color: #9497ab; font-weight: 700; font-size: 12px; cursor: pointer;
 }
-
-.App-header .welcome .version {
-    font-size: 50%;
-    font-weight: lighter;
+.App-lang.active { color: #1d1e2c; background: #f4f5fa; }
+.App-icon {
+    width: 36px; height: 36px; border: none; border-radius: 50%;
+    background: transparent; font-size: 17px; cursor: pointer;
 }
-
-.App-header .btn {
-    font-size: 100%;
-}
-
-.App-header .controls .btn.active {
-    color: #919e3d;
-}
-
-.App-header .btn.focus, .App-header .btn:focus, .App-header .btn:hover {
-    color: #919e3d;
-}
+.App-icon:hover { background: #f4f5fa; }
 
 /* Announce dialog */
 

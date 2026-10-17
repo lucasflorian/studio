@@ -180,18 +180,23 @@ class App extends React.Component {
                     />}
                     {this.state.viewer}
                     <header className="App-header">
-                        <div className="flags">
-                            <span title="Français" role="img" aria-label="FR" onClick={() => i18n.changeLanguage('fr')}>🇫🇷&nbsp;</span>
-                            <span title="English" role="img" aria-label="GB" onClick={() => i18n.changeLanguage('en')}>🇬🇧&nbsp;</span>
-                            <span title={t('header.buttons.settings')} className="btn glyphicon glyphicon-wrench" onClick={this.showSettings}/>
+                        <div className="App-brand">
+                            <img className="App-logo" src="/favicon.svg" alt="" />
+                            <span className="App-name">STUdio</span>
+                            {this.props.evergreen.version && <span className="App-version">{this.props.evergreen.version}</span>}
                         </div>
-                        <div  className="welcome">
-                            {t('header.welcome')}
-                            {this.props.evergreen.version && <span className="version"> ({this.props.evergreen.version})</span>}
-                        </div>
-                        <div className="controls">
-                            <span title={t('header.buttons.library')} className={`btn glyphicon glyphicon-film ${this.state.shown === 'library' && 'active'}`} onClick={this.showLibrary}/>
-                            <span title={t('header.buttons.editor')} className={`btn glyphicon glyphicon-edit ${this.state.shown === 'editor' && 'active'}`} onClick={this.showEditor}/>
+                        <nav className="App-tabs">
+                            <button className={`App-tab ${this.state.shown === 'library' ? 'active' : ''}`} onClick={this.showLibrary}>
+                                <span aria-hidden="true">&#128218;</span> Bibliothèque
+                            </button>
+                            <button className={`App-tab ${this.state.shown === 'editor' ? 'active' : ''}`} onClick={this.showEditor}>
+                                <span aria-hidden="true">&#9998;</span> Éditeur
+                            </button>
+                        </nav>
+                        <div className="App-tools">
+                            <button className={`App-lang ${i18n.language && i18n.language.startsWith('fr') ? 'active' : ''}`} onClick={() => i18n.changeLanguage('fr')}>FR</button>
+                            <button className={`App-lang ${i18n.language && i18n.language.startsWith('en') ? 'active' : ''}`} onClick={() => i18n.changeLanguage('en')}>EN</button>
+                            <button className="App-icon" title={t('header.buttons.settings')} onClick={this.showSettings} aria-label={t('header.buttons.settings')}><span role="img" aria-label="réglages">&#9881;&#65039;</span></button>
                         </div>
                     </header>
                     {this.state.shown === 'library' && <PackLibrary/>}
