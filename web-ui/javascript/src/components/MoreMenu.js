@@ -36,8 +36,13 @@ class MoreMenu extends React.Component {
             // de tout (cartes voisines, fenêtres avec défilement...)
             const rect = this.ref.current.getBoundingClientRect();
             const up = rect.bottom + 300 > window.innerHeight && rect.top > 300;
-            const pos = { right: Math.max(8, window.innerWidth - rect.right) };
-            if (up) { pos.bottom = window.innerHeight - rect.top + 6; } else { pos.top = rect.bottom + 6; }
+            const pos = { right: Math.max(8, window.innerWidth - rect.right), overflowY: 'auto' };
+            if (up) {
+                // « top » est défini par la feuille de style : il faut l'annuler, sinon le menu sort de l'écran
+                Object.assign(pos, { bottom: window.innerHeight - rect.top + 6, top: 'auto', maxHeight: rect.top - 16 });
+            } else {
+                Object.assign(pos, { top: rect.bottom + 6, bottom: 'auto', maxHeight: window.innerHeight - rect.bottom - 16 });
+            }
             this.raised = this.ref.current.closest('.sl-card');
             this.raised && this.raised.classList.add('sl-raised');
             this.setState({ open: true, pos });
