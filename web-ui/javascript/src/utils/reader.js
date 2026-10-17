@@ -275,14 +275,14 @@ export function readFromArchive(file) {
                         let coverNode = json.stageNodes.filter(node => node.squareOne)
                             .concat(Object.values(virtualNodes).filter(grp => grp[0].type.startsWith('cover')).map(grp => grp[0]))[0];
                         let firstUsefulNodeUuid = coverNode.okTransition.actionNode;
-                        if (storyVirtualStage.okTransition.actionNode !== firstUsefulNodeUuid) {
+                        if (menuEntryId(storyVirtualStage.okTransition.actionNode) !== firstUsefulNodeUuid) {
                             // Enable custom OK transition to create OK port
                             storyNode.setCustomOkTransition(true);
                             // Create link
                             links.push(storyNode.okPort.link(getTransitionTargetNode(storyVirtualStage.okTransition, actionNodes, simplifiedNodes)));
                         }
                         // Home transition may be disabled
-                        if (!storyNode.disableHome && storyVirtualStage.homeTransition.actionNode !== firstUsefulNodeUuid) {
+                        if (!storyNode.disableHome && menuEntryId(storyVirtualStage.homeTransition.actionNode) !== firstUsefulNodeUuid) {
                             // Enable custom Home transition to create Home port
                             storyNode.setCustomHomeTransition(true);
                             // Create link
@@ -371,6 +371,14 @@ function dataUrlPrefix(assetFileName) {
     }
 }
 
+// Les transitions vers le choix N d'un menu visent l'action « options » du menu (suffixe 3333...).
+// Dans l'éditeur, le menu n'a qu'un point d'entrée : on se rattache à l'action « question » (suffixe 1111...).
+function menuEntryId(actionNodeId) {
+    return (actionNodeId && actionNodeId.endsWith('333333333333'))
+        ? actionNodeId.substring(0, actionNodeId.length - 12) + '111111111111'
+        : actionNodeId;
+}
+
 function getTransitionTargetNode(transition, actionNodes, simplifiedNodes) {
     // Try to find an actual action node
     let actionNode = actionNodes.get(transition.actionNode);
@@ -386,7 +394,8 @@ function getTransitionTargetNode(transition, actionNodes, simplifiedNodes) {
     }
     // Otherwise, target must be a simplified node
     else {
-        return simplifiedNodes.get(transition.actionNode).fromPort;
+        let target = simplifiedNodes.get(transition.actionNode) || simplifiedNodes.get(menuEntryId(transition.actionNode));
+        return target.fromPort;
     }
 }
 

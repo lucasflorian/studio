@@ -135,8 +135,8 @@ export async function writeToArchive(diagramModel) {
                     },
                 image: imageFile,
                 audio: audioFile,
-                okTransition: buildTransitionObject(okTarget),
-                homeTransition: buildTransitionObject(homeTarget),
+                okTransition: buildTransitionObject(okTarget, node),
+                homeTransition: buildTransitionObject(homeTarget, node),
                 controlSettings: node.getControls()
             };
             if (node.isSquareOne()) {
@@ -320,9 +320,26 @@ function storyNodeActionUuid(node) {
     return alterUuid(node.getUuid(), "555555555555");
 }
 
-function buildTransitionObject(targetPort) {
+// Index du choix d'un menu qui mène directement à ce nœud (-1 si aucun)
+function menuOptionLeadingTo(menuNode, node) {
+    return menuNode.optionsOut.findIndex(port => Object.values(port.getLinks())
+        .some(link => link.getForwardTargetPort() && link.getForwardTargetPort().getParent() === node));
+}
+
+function buildTransitionObject(targetPort, sourceNode = null) {
     if (targetPort === null) {
         return null;
+    }
+    // Retour d'une histoire vers un menu : on revient sur le choix qui mène à cette histoire
+    // (par ex. bouton maison pendant la chanson 8 -> menu positionné sur le choix 8)
+    if (sourceNode && sourceNode.getType() === 'story' && targetPort.getParent().getType() === 'menu') {
+        let idx = menuOptionLeadingTo(targetPort.getParent(), sourceNode);
+        if (idx >= 0) {
+            return {
+                actionNode: menuNodeOptionsActionUuid(targetPort.getParent()),
+                optionIndex: idx
+            };
+        }
     }
     switch (targetPort.getParent().getType()) {
         case 'action':  // Actual action node
