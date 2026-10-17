@@ -463,6 +463,18 @@ export const actionRemoveFromLibrary = (path, t) => {
     }
 };
 
+// Compare deux versions « x.y.z » : vrai si `candidate` est strictement plus récente que `current`
+const isNewerVersion = (candidate, current) => {
+    const parse = v => String(v || '').replace(/^v/, '').split(/[.-]/).map(n => parseInt(n, 10) || 0);
+    const a = parse(candidate), b = parse(current);
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+        if ((a[i] || 0) !== (b[i] || 0)) {
+            return (a[i] || 0) > (b[i] || 0);
+        }
+    }
+    return false;
+};
+
 export const actionLoadEvergreen = (announceOptOut, t) => {
     return dispatch => {
         let toastId = toast(t('toasts.evergreen.loading'), { autoClose: false });
@@ -473,7 +485,7 @@ export const actionLoadEvergreen = (announceOptOut, t) => {
                 toast.update(toastId,{ render: t('toasts.evergreen.fetching') });
                 return fetchEvergreenLatestRelease()
                     .then(latest => {
-                        if (latest.name !== infos.version && Date.parse(latest.published_at) > Date.parse(infos.timestamp)) {
+                        if (isNewerVersion(latest.name, infos.version)) {
                             toast.update(toastId, { type: toast.TYPE.SUCCESS, render: <><p>{t('toasts.evergreen.fetched.newRelease.label')}</p><p><a href={latest.html_url}>{t('toasts.evergreen.fetched.newRelease.link', { version: latest.name })}</a></p></> });
                         } else {
                             toast.update(toastId, { type: toast.TYPE.INFO, render: t('toasts.evergreen.fetched.upToDate', { version: infos.version }), autoClose: 5000 });
