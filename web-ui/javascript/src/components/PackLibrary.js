@@ -25,11 +25,21 @@ import {
 } from "../actions";
 import {AppContext} from "../AppContext";
 import Modal from "./Modal";
+import MoreMenu from "./MoreMenu";
 import {
     LOCAL_STORAGE_ALLOW_ENRICHED_BINARY_FORMAT
 } from "../utils/storage";
 
 import './PackLibrary.css';
+
+const FORMAT_LABELS = {
+    archive: 'Archive modifiable (.zip)',
+    raw: 'Format Lunii v1 (brut)',
+    fs: 'Format Lunii v2/v3 (FS)'
+};
+
+// Délai max d'affichage « Envoi en cours » si l'appareil ne confirme jamais
+const SENDING_TIMEOUT_MS = 10 * 60 * 1000;
 
 
 class PackLibrary extends React.Component {
@@ -45,12 +55,19 @@ class PackLibrary extends React.Component {
                 metadata: null,
                 packs: []
             },
+            search: '',
+            filter: 'all',
+            sending: {},
+            copying: {},
+            dragOver: false,
+            details: null,          // uuid du pack dont on affiche les détails
+            showDeviceInfo: false,
+            showReorder: false,
+            reorderList: [],
             showRemoveFromLibraryConfirmDialog: false,
-            removingFromLibrary: null,
+            removingFromLibrary: null,       // tableau de chemins
             showRemoveFromDeviceConfirmDialog: false,
             removingFromDevice: null,
-            reordering: null,
-            beforeReordering: null,
             allowEnrichedDialog: {
                 show: false,
                 data: null
@@ -70,174 +87,182 @@ class PackLibrary extends React.Component {
     }
 
     componentWillReceiveProps(nextProps, nextContext) {
-        console.log(nextProps);
+        // Un pack qui apparaît sur l'appareil n'est plus « en cours d'envoi »
+        let sending = {...this.state.sending};
+        (nextProps.device.packs || []).forEach(p => { delete sending[p.uuid]; });
+        if (!nextProps.device.metadata) {
+            sending = {};
+        }
+        let copying = {...this.state.copying};
+        (nextProps.library.packs || []).forEach(g => { delete copying[g.uuid]; });
         this.setState({
             device: nextProps.device,
-            library: nextProps.library
+            library: nextProps.library,
+            sending,
+            copying
         });
     }
 
-    onDropPackIntoDevice = (event) => {
-        event.preventDefault();
-        let packData = event.dataTransfer.getData("local-library-pack");
-        if (!packData) {
-            // Ignore missing node data
+    componentWillUnmount() {
+        Object.values(this.sendingTimers || {}).forEach(clearTimeout);
+    }
+
+    /* ---------- Envoi vers la Lunii ---------- */
+
+    devicePack = (uuid) => (this.state.device.packs || []).find(p => p.uuid === uuid);
+
+    isOnDevice = (uuid) => !!this.devicePack(uuid);
+
+    markSending = (uuid, on) => {
+        this.sendingTimers = this.sendingTimers || {};
+        clearTimeout(this.sendingTimers[uuid]);
+        if (on) {
+            this.sendingTimers[uuid] = setTimeout(() => this.markSending(uuid, false), SENDING_TIMEOUT_MS);
+        }
+        this.setState(state => {
+            const sending = {...state.sending};
+            if (on) { sending[uuid] = true; } else { delete sending[uuid]; }
+            return { sending };
+        });
+    };
+
+    sendToDevice = (group) => {
+        const driver = this.state.device.metadata && this.state.device.metadata.driver;
+        if (!driver) {
             return;
         }
-        var data = JSON.parse(packData);
+        // Le pack le plus récent
+        const latestPack = group.packs[0];
+        // Le pack le plus récent déjà au bon format pour cet appareil
+        const compatiblePack = group.packs.find(p => p.format === driver);
 
-        // Get the latest pack
-        var latestPack = data.packs[0];
-        console.log('latest pack: %o', latestPack);
-        // Get the latest device-compatible pack
-        var compatiblePack = data.packs.find(p => p.format === this.state.device.metadata.driver);
-        console.log('device-compatible pack: %o', compatiblePack);
-
-        if (compatiblePack == null) {   // No compatible pack: convert latest pack
-            console.log('latest pack must be converted for driver: %s', this.state.device.metadata.driver);
-            // Ask for enriched raw format preference
-            if (this.state.device.metadata.driver === 'raw' && localStorage.getItem(LOCAL_STORAGE_ALLOW_ENRICHED_BINARY_FORMAT) === null) {
+        if (compatiblePack == null) {
+            // Aucun fichier compatible : on convertit d'abord le plus récent
+            if (driver === 'raw' && localStorage.getItem(LOCAL_STORAGE_ALLOW_ENRICHED_BINARY_FORMAT) === null) {
                 this.setState({
                     allowEnrichedDialog: {
                         show: true,
-                        data: { pack: {...latestPack, format: this.state.device.metadata.driver}, format: this.state.device.metadata.driver, addToDevice: true }
+                        data: { pack: {...latestPack, format: driver}, format: driver, addToDevice: true }
                     }
                 });
             } else {
-                // Pack is converted and stored in the local library, then transferred to the device
-                this.props.convertPackInLibrary(latestPack.uuid, latestPack.path, this.state.device.metadata.driver, this.props.settings.allowEnriched, this.context)
+                this.markSending(group.uuid, true);
+                this.props.convertPackInLibrary(latestPack.uuid, latestPack.path, driver, this.props.settings.allowEnriched, this.context)
                     .then(path => {
-                        this.doAddToDevice({...latestPack, format: this.state.device.metadata.driver}, path);
-                    });
+                        if (path) {
+                            this.doAddToDevice({...latestPack, format: driver}, path);
+                        } else {
+                            this.markSending(group.uuid, false);
+                        }
+                    })
+                    .catch(() => this.markSending(group.uuid, false));
             }
-        } else if (latestPack.timestamp > compatiblePack.timestamp) {   // Compatible pack is not the latest pack: confirm re-conversion
-            // Ask for conversion confirmation
-            console.log('pack is out of date. re-convert from latest ?');
+        } else if (latestPack.timestamp > compatiblePack.timestamp) {
+            // Le fichier compatible est plus ancien que la dernière version : demander s'il faut reconvertir
             this.setState({
                 confirmConversionDialog: {
                     show: true,
-                    data: { pack: {...latestPack, format: this.state.device.metadata.driver}, format: this.state.device.metadata.driver }
+                    data: { pack: {...latestPack, format: driver}, format: driver, fallback: compatiblePack }
                 }
             });
         } else {
-            console.log('OK, transferring pack: %o', compatiblePack);
-            // OK, go on and transfer pack
             this.doAddToDevice(compatiblePack, compatiblePack.path);
         }
     };
 
     doAddToDevice = (data, path) => {
-        // Transfer pack and show progress
-        this.props.addFromLibrary(data.uuid, path, data.format, this.state.device.metadata.driver, this.context);
+        this.markSending(data.uuid, true);
+        return this.props.addFromLibrary(data.uuid, path, data.format, this.state.device.metadata.driver, this.context);
     };
 
     dismissEnrichedDialog = (allow) => {
         return () => {
+            const data = this.state.allowEnrichedDialog.data;
+            this.setState({ allowEnrichedDialog: { show: false, data: null } });
             this.props.setAllowEnriched(allow);
-            // Pack is converted and stored in the local library, then transferred to the device
-            this.props.convertPackInLibrary(this.state.allowEnrichedDialog.data.pack.uuid, this.state.allowEnrichedDialog.data.pack.path, this.state.allowEnrichedDialog.data.format, allow, this.context)
+            if (data.addToDevice) {
+                this.markSending(data.pack.uuid, true);
+            }
+            this.props.convertPackInLibrary(data.pack.uuid, data.pack.path, data.format, allow, this.context)
                 .then(path => {
-                    if (this.state.allowEnrichedDialog.data.addToDevice) {
-                        return this.doAddToDevice(this.state.allowEnrichedDialog.data.pack, path);
+                    if (data.addToDevice && path) {
+                        return this.doAddToDevice(data.pack, path);
                     }
-                })
-                .then(() => {
-                    this.setState({
-                        allowEnrichedDialog: {
-                            show: false,
-                            data: null
-                        }
-                    });
+                    this.markSending(data.pack.uuid, false);
                 });
         }
     };
 
     dismissConfirmConversionDialog = (answer) => {
         return () => {
+            const data = this.state.confirmConversionDialog.data;
+            this.setState({ confirmConversionDialog: { show: false, data: null } });
             if (answer) {
-                // Pack is converted and stored in the local library, then transferred to the device
-                this.props.convertPackInLibrary(this.state.confirmConversionDialog.data.pack.uuid, this.state.confirmConversionDialog.data.pack.path, this.state.confirmConversionDialog.data.format, this.props.settings.allowEnriched, this.context)
-                    .then(path => this.doAddToDevice(this.state.confirmConversionDialog.data.pack, path))
-                    .then(() => {
-                        this.setState({
-                            confirmConversionDialog: {
-                                show: false,
-                                data: null
-                            }
-                        });
-                    });
-            } else {
-                this.setState({
-                    confirmConversionDialog: {
-                        show: false,
-                        data: null
-                    }
-                });
+                this.markSending(data.pack.uuid, true);
+                this.props.convertPackInLibrary(data.pack.uuid, data.pack.path, data.format, this.props.settings.allowEnriched, this.context)
+                    .then(path => path ? this.doAddToDevice(data.pack, path) : this.markSending(data.pack.uuid, false));
+            } else if (data.fallback) {
+                // Envoyer quand même l'ancien fichier compatible
+                this.doAddToDevice(data.fallback, data.fallback.path);
             }
         }
     };
 
+    /* ---------- Retirer de la Lunii ---------- */
+
     onRemovePackFromDevice = (uuid) => {
-        return () => {
-            this.setState({removingFromDevice: uuid});
-            this.showRemoveFromDeviceConfirmDialog();
-        }
+        this.setState({removingFromDevice: uuid, showRemoveFromDeviceConfirmDialog: true});
     };
 
     doRemovePackFromDevice = () => {
         this.props.removeFromDevice(this.state.removingFromDevice)
-            .finally(() => {
-                // Always hide confirmation dialog
-                this.dismissRemoveFromDeviceConfirmDialog();
-            });
-    };
-
-    showRemoveFromDeviceConfirmDialog = () => {
-        this.setState({showRemoveFromDeviceConfirmDialog: true});
+            .finally(() => this.dismissRemoveFromDeviceConfirmDialog());
     };
 
     dismissRemoveFromDeviceConfirmDialog = () => {
         this.setState({showRemoveFromDeviceConfirmDialog: false});
     };
 
-    getDroppedFile = (event) => {
-        let file = null;
-        if (event.dataTransfer.items) {
-            // Use first file only
-            // If dropped items aren't files, reject them
-            if (event.dataTransfer.items[0].kind === 'file') {
-                file = event.dataTransfer.items[0].getAsFile();
-                console.log('Dropped item file name = ' + file.name);
-            } else {
-                // Ignore non-file item
-                return;
-            }
-        } else {
-            // Use first file only
-            file = event.dataTransfer.files[0];
-            console.log('Dropped file name = ' + file.name);
-        }
-        return file;
+    /* ---------- Ordre des packs sur la Lunii ---------- */
+
+    openReorder = () => {
+        this.setState({ showReorder: true, reorderList: [...this.state.device.packs] });
     };
 
-    onDropPackIntoLibrary = (event) => {
-        event.preventDefault();
-        let packData = event.dataTransfer.getData("device-pack");
-        if (!packData) {
-            // Handle dropped file
-            if (event.dataTransfer.items || event.dataTransfer.files) {
-                let file = this.getDroppedFile(event);
-                this.addPackToLibrary(file);
-            }
-            // Otherwise ignore missing node data / file
+    moveInReorder = (idx, delta) => {
+        const list = [...this.state.reorderList];
+        const target = idx + delta;
+        if (target < 0 || target >= list.length) {
             return;
         }
-        var data = JSON.parse(packData);
-        // Ignore official packs from device (draggable only for device reordering)
-        var droppedPack = this.state.device.packs.find(p => p.uuid === data.uuid);
-        if (this.isPackDraggable(droppedPack)) {
-            // Transfer pack and show progress
-            this.props.addToLibrary(data.uuid, this.state.device.metadata.driver, this.context);
+        [list[idx], list[target]] = [list[target], list[idx]];
+        this.setState({ reorderList: list });
+    };
+
+    saveReorder = () => {
+        const before = this.state.device.packs.map(p => p.uuid).join(',');
+        const after = this.state.reorderList.map(p => p.uuid);
+        if (before !== after.join(',')) {
+            this.props.reorderOnDevice(after);
+        }
+        this.setState({ showReorder: false });
+    };
+
+    /* ---------- Bibliothèque ---------- */
+
+    getDroppedFile = (event) => {
+        if (event.dataTransfer.items && event.dataTransfer.items.length) {
+            return event.dataTransfer.items[0].kind === 'file' ? event.dataTransfer.items[0].getAsFile() : null;
+        }
+        return event.dataTransfer.files && event.dataTransfer.files[0];
+    };
+
+    onDropIntoLibrary = (event) => {
+        event.preventDefault();
+        this.setState({ dragOver: false });
+        const file = this.getDroppedFile(event);
+        if (file) {
+            this.addPackToLibrary(file);
         }
     };
 
@@ -246,9 +271,9 @@ class PackLibrary extends React.Component {
     };
 
     packAddFileSelected = (event) => {
-        let file = event.target.files[0];
-        console.log('Selected file name = ' + file.name);
+        const file = event.target.files[0];
         this.addPackToLibrary(file);
+        event.target.value = '';
     };
 
     addPackToLibrary = (file) => {
@@ -256,106 +281,327 @@ class PackLibrary extends React.Component {
         if (!file) {
             return;
         }
-        console.log(file.type);
-        if (['application/zip', 'application/x-zip-compressed'].indexOf(file.type) === -1 && !file.name.endsWith('.pack')) {
+        if (['application/zip', 'application/x-zip-compressed'].indexOf(file.type) === -1 && !file.name.endsWith('.pack') && !file.name.endsWith('.zip')) {
             toast.error(t('toasts.library.packFileWrongType'));
             return;
         }
         this.props.uploadPackToLibrary(file.name, file);
     };
 
-    onConvertLibraryPack = (pack, format) => {
-        return () => {
-            if (format === 'raw' && localStorage.getItem(LOCAL_STORAGE_ALLOW_ENRICHED_BINARY_FORMAT) === null) {
-                // Ask for enriched raw format preference
-                this.setState({
-                    allowEnrichedDialog: {
-                        show: true,
-                        data: { pack, format, addToDevice: false }
-                    }
-                });
-                return;
-            }
-            // Pack is converted and stored in the local library
-            this.props.convertPackInLibrary(pack.uuid, pack.path, format, this.props.settings.allowEnriched, this.context);
-        }
-    };
-
-    onEditLibraryPack = (pack) => {
-        return () => {
-            // First, download pack file from library
-            this.props.downloadPackFromLibrary(pack.uuid, pack.path)
-                .then(packFile => {
-                    // Next, load pack into editor
-                    this.props.loadPackInEditor(packFile, pack.path);
-                });
-        }
-    };
-
-    onRemovePackFromLibrary = (path) => {
-        return () => {
-            this.setState({removingFromLibrary: path});
-            this.showRemoveFromLibraryConfirmDialog();
-        }
-    };
-
-    doRemovePackFromLibrary = () => {
-        this.props.removeFromLibrary(this.state.removingFromLibrary)
-            .finally(() => {
-                // Always hide confirmation dialog
-                this.dismissRemoveFromLibraryConfirmDialog();
+    convertLibraryPack = (pack, format) => {
+        if (format === 'raw' && localStorage.getItem(LOCAL_STORAGE_ALLOW_ENRICHED_BINARY_FORMAT) === null) {
+            this.setState({
+                allowEnrichedDialog: {
+                    show: true,
+                    data: { pack, format, addToDevice: false }
+                }
             });
+            return;
+        }
+        this.props.convertPackInLibrary(pack.uuid, pack.path, format, this.props.settings.allowEnriched, this.context);
     };
 
-    showRemoveFromLibraryConfirmDialog = () => {
-        this.setState({showRemoveFromLibraryConfirmDialog: true});
+    editLibraryPack = (pack) => {
+        this.props.downloadPackFromLibrary(pack.uuid, pack.path)
+            .then(packFile => this.props.loadPackInEditor(packFile, pack.path));
+    };
+
+    copyDevicePackToLibrary = (pack) => {
+        this.setState(state => ({ copying: {...state.copying, [pack.uuid]: true} }));
+        const done = () => this.setState(state => {
+            const copying = {...state.copying};
+            delete copying[pack.uuid];
+            return { copying };
+        });
+        // Sécurité : on libère le bouton au bout de 10 minutes si rien ne revient
+        setTimeout(done, SENDING_TIMEOUT_MS);
+        Promise.resolve(this.props.addToLibrary(pack.uuid, this.state.device.metadata.driver, this.context)).catch(done);
+    };
+
+    onRemovePacksFromLibrary = (paths) => {
+        this.setState({removingFromLibrary: paths, showRemoveFromLibraryConfirmDialog: true});
+    };
+
+    doRemovePacksFromLibrary = () => {
+        const paths = this.state.removingFromLibrary || [];
+        paths.reduce((p, path) => p.then(() => this.props.removeFromLibrary(path)), Promise.resolve())
+            .finally(() => this.dismissRemoveFromLibraryConfirmDialog());
     };
 
     dismissRemoveFromLibraryConfirmDialog = () => {
-        this.setState({showRemoveFromLibraryConfirmDialog: false});
+        this.setState({showRemoveFromLibraryConfirmDialog: false, removingFromLibrary: null});
     };
 
-    isPackDraggable = (pack) => {
-        return !pack.official;
+    copyToClipboard = (text) => {
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(text).then(() => toast.info('Copié dans le presse-papiers', { autoClose: 2000 }));
+        }
     };
 
-    onCreateNewPackInEditor = (e) => {
-        e.preventDefault();
-        this.props.createPackInEditor();
-    };
+    /* ---------- Rendu ---------- */
 
-    onOpenSamplePackInEditor = (e) => {
-        e.preventDefault();
-        this.props.loadSampleInEditor();
-    };
+    renderThumb(pack, size) {
+        return <div className={`sl-thumb sl-thumb-${size}`}>
+            {pack && pack.image
+                ? <img src={pack.image} alt="" draggable={false}/>
+                : <span className="sl-thumb-placeholder" aria-hidden="true">&#128214;</span>}
+        </div>;
+    }
+
+    renderGroupCard(group) {
+        const latest = group.packs[0];
+        const plugged = !!this.state.device.metadata;
+        const onDevice = this.isOnDevice(group.uuid);
+        const sending = !!this.state.sending[group.uuid];
+        const official = !!latest.official;
+        const archive = group.packs.find(p => p.format === 'archive');
+        const title = latest.title || group.uuid;
+
+        let action;
+        if (sending) {
+            action = <button className="sl-btn sl-btn-primary" disabled><span className="sl-spinner"/>Envoi en cours…</button>;
+        } else if (onDevice) {
+            action = <div className="sl-on-device"><span className="sl-check">&#10003;</span>Sur la Lunii</div>;
+        } else if (official) {
+            action = <div className="sl-muted-note" title="Les packs officiels s'installent avec l'application Luniistore">Pack officiel</div>;
+        } else {
+            action = <button className="sl-btn sl-btn-primary"
+                             disabled={!plugged}
+                             title={plugged ? 'Copier cette histoire sur la Lunii' : 'Branche ta Lunii et allume-la pour envoyer'}
+                             onClick={() => this.sendToDevice(group)}>
+                Envoyer sur la Lunii
+            </button>;
+        }
+
+        const items = [
+            archive
+                ? { icon: '✏️', label: 'Modifier dans l\'éditeur', onClick: () => this.editLibraryPack(archive) }
+                : (!official && { icon: '✏️', label: 'Rendre modifiable', hint: 'Crée une copie au format archive, ouvrable dans l\'éditeur', onClick: () => this.convertLibraryPack(latest, 'archive') }),
+            onDevice && plugged && { icon: '⏏️', label: 'Retirer de la Lunii', onClick: () => this.onRemovePackFromDevice(group.uuid) },
+            { icon: 'ℹ️', label: 'Fichiers et formats…', onClick: () => this.setState({ details: group.uuid }) },
+            { divider: true },
+            { icon: '🗑️', label: 'Supprimer de la bibliothèque', danger: true, onClick: () => this.onRemovePacksFromLibrary(group.packs.map(p => p.path)) }
+        ];
+
+        return <div key={group.uuid} className={`sl-card ${onDevice ? 'is-on-device' : ''}`}>
+            <div className="sl-card-media">
+                {this.renderThumb(latest, 'lg')}
+                {onDevice && <span className="sl-badge sl-badge-success">Sur la Lunii</span>}
+                {official && <span className="sl-badge sl-badge-official">Officiel</span>}
+                {latest.nightModeAvailable && <span className="sl-badge sl-badge-night" role="img" aria-label="Mode nuit disponible" title="Mode nuit disponible">&#127769;</span>}
+            </div>
+            <div className="sl-card-body">
+                <div className="sl-card-title" title={title}>{title}</div>
+                <div className="sl-card-footer">
+                    {action}
+                    <MoreMenu items={items}/>
+                </div>
+            </div>
+        </div>;
+    }
+
+    renderDeviceOnlyCard(pack) {
+        const title = pack.title || pack.uuid;
+        const items = [
+            !pack.official && { icon: '📥', label: 'Copier dans la bibliothèque', onClick: () => this.copyDevicePackToLibrary(pack) },
+            { icon: '⏏️', label: 'Retirer de la Lunii', danger: true, onClick: () => this.onRemovePackFromDevice(pack.uuid) }
+        ];
+        return <div key={pack.uuid} className="sl-card is-on-device">
+            <div className="sl-card-media">
+                {this.renderThumb(pack, 'lg')}
+                <span className="sl-badge sl-badge-success">Sur la Lunii</span>
+                {pack.official && <span className="sl-badge sl-badge-official">Officiel</span>}
+            </div>
+            <div className="sl-card-body">
+                <div className="sl-card-title" title={title}>{title}</div>
+                <div className="sl-card-footer">
+                    {pack.official
+                        ? <div className="sl-muted-note" title="Les packs officiels sont protégés : ils ne peuvent pas être copiés depuis la Lunii">Pack officiel</div>
+                        : this.state.copying[pack.uuid]
+                            ? <button className="sl-btn sl-btn-secondary" disabled><span className="sl-spinner sl-spinner-dark"/>Récupération…</button>
+                            : <button className="sl-btn sl-btn-secondary"
+                                      title="Copier cette histoire de la Lunii vers la bibliothèque de l'ordinateur"
+                                      onClick={() => this.copyDevicePackToLibrary(pack)}>
+                                Récupérer dans la bibliothèque
+                            </button>}
+                    <MoreMenu items={items}/>
+                </div>
+            </div>
+        </div>;
+    }
+
+    renderDeviceBar() {
+        const md = this.state.device.metadata;
+        if (!md) {
+            return <div className="sl-device sl-device-off">
+                <div className="sl-device-icon" aria-hidden="true">&#128268;</div>
+                <div className="sl-device-text">
+                    <div className="sl-device-title">Aucune Lunii connectée</div>
+                    <div className="sl-device-sub">Branche ta Lunii en USB, puis allume-la.</div>
+                </div>
+            </div>;
+        }
+        const pct = Math.round(100 * md.storage.taken / md.storage.size);
+        const count = this.state.device.packs.length;
+        return <div className="sl-device sl-device-on">
+            <div className="sl-device-icon" aria-hidden="true">&#127911;</div>
+            <div className="sl-device-text">
+                <div className="sl-device-title">Lunii connectée</div>
+                <div className="sl-device-sub">{count} histoire{count > 1 ? 's' : ''} · {pct}% de la mémoire utilisée{md.error ? ' · erreurs détectées' : ''}</div>
+                <div className="sl-meter"><div className="sl-meter-fill" style={{width: pct + '%'}}/></div>
+            </div>
+            <MoreMenu items={[
+                { icon: '↕️', label: 'Changer l\'ordre des histoires', onClick: this.openReorder },
+                { icon: 'ℹ️', label: 'Infos de l\'appareil', onClick: () => this.setState({ showDeviceInfo: true }) }
+            ]}/>
+        </div>;
+    }
+
+    renderSheet(title, onClose, body, footer) {
+        return <div className="sl-overlay" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+            <div className="sl-sheet" role="dialog" aria-label={title}>
+                <div className="sl-sheet-head">
+                    <h3>{title}</h3>
+                    <button className="sl-icon-btn" onClick={onClose} aria-label="Fermer">&times;</button>
+                </div>
+                <div className="sl-sheet-body">{body}</div>
+                {footer && <div className="sl-sheet-foot">{footer}</div>}
+            </div>
+        </div>;
+    }
+
+    renderDetails() {
+        const group = this.state.library.packs.find(g => g.uuid === this.state.details);
+        if (!group) {
+            return null;
+        }
+        const close = () => this.setState({ details: null });
+        const official = !!group.packs[0].official;
+        const body = <>
+            <div className="sl-details-head">
+                {this.renderThumb(group.packs[0], 'md')}
+                <div>
+                    <div className="sl-details-title">{group.packs[0].title || group.uuid}</div>
+                    <div className="sl-details-uuid">
+                        <code>{group.uuid}</code>
+                        <button className="sl-link" onClick={() => this.copyToClipboard(group.uuid)}>Copier</button>
+                    </div>
+                </div>
+            </div>
+            <p className="sl-help">Une même histoire peut exister en plusieurs fichiers : une archive modifiable et des versions converties pour la Lunii. STUdio choisit automatiquement le bon fichier à l'envoi.</p>
+            <div className="sl-files">
+                {group.packs.map((p, idx) => <div key={p.path} className="sl-file">
+                    <div className="sl-file-main">
+                        <div className="sl-file-format">
+                            {FORMAT_LABELS[p.format] || p.format}
+                            <span className="sl-chip">v{p.version}</span>
+                            {idx === 0 && <span className="sl-chip sl-chip-accent">plus récent</span>}
+                        </div>
+                        <div className="sl-file-path" title={p.path}>{p.path}</div>
+                    </div>
+                    <MoreMenu items={[
+                        p.format === 'archive' && { icon: '✏️', label: 'Ouvrir dans l\'éditeur', onClick: () => { close(); this.editLibraryPack(p); } },
+                        p.format !== 'archive' && !official && { icon: '🗜️', label: 'Convertir en archive modifiable', onClick: () => this.convertLibraryPack(p, 'archive') },
+                        p.format === 'archive' && { icon: '📂', label: 'Convertir au format Lunii v2/v3 (FS)', onClick: () => this.convertLibraryPack(p, 'fs') },
+                        p.format === 'archive' && { icon: '📦', label: 'Convertir au format Lunii v1 (brut)', onClick: () => this.convertLibraryPack(p, 'raw') },
+                        { divider: true },
+                        { icon: '🗑️', label: 'Supprimer ce fichier', danger: true, onClick: () => this.onRemovePacksFromLibrary([p.path]) }
+                    ]}/>
+                </div>)}
+            </div>
+        </>;
+        return this.renderSheet('Fichiers et formats', close, body);
+    }
+
+    renderDeviceInfo() {
+        const md = this.state.device.metadata;
+        if (!md) {
+            return null;
+        }
+        const close = () => this.setState({ showDeviceInfo: false });
+        const mb = (b) => (b / 1024 / 1024).toFixed(0) + ' Mo';
+        const body = <dl className="sl-dl">
+            <dt>Numéro de série</dt><dd>{md.serial || '-'}</dd>
+            <dt>Firmware</dt><dd>{md.firmware || '-'}</dd>
+            <dt>Format des packs</dt><dd>{FORMAT_LABELS[md.driver] || md.driver}</dd>
+            <dt>Mémoire</dt><dd>{mb(md.storage.taken)} utilisés sur {mb(md.storage.size)}</dd>
+            <dt>UUID</dt><dd><code>{md.uuid}</code></dd>
+            {md.error && <><dt>État</dt><dd className="sl-text-danger">L'appareil signale des erreurs</dd></>}
+        </dl>;
+        return this.renderSheet('Infos de la Lunii', close, body);
+    }
+
+    renderReorder() {
+        const close = () => this.setState({ showReorder: false });
+        const body = <>
+            <p className="sl-help">L'ordre ci-dessous est celui dans lequel ta fille fait défiler les histoires sur la Lunii.</p>
+            <ol className="sl-reorder">
+                {this.state.reorderList.map((p, idx) => <li key={p.uuid}>
+                    {this.renderThumb(p, 'sm')}
+                    <span className="sl-reorder-title">{p.title || p.uuid}</span>
+                    <button className="sl-icon-btn" disabled={idx === 0} onClick={() => this.moveInReorder(idx, -1)} aria-label="Monter">&#8593;</button>
+                    <button className="sl-icon-btn" disabled={idx === this.state.reorderList.length - 1} onClick={() => this.moveInReorder(idx, 1)} aria-label="Descendre">&#8595;</button>
+                </li>)}
+            </ol>
+        </>;
+        const footer = <>
+            <button className="sl-btn sl-btn-ghost" onClick={close}>Annuler</button>
+            <button className="sl-btn sl-btn-primary" onClick={this.saveReorder}>Enregistrer l'ordre</button>
+        </>;
+        return this.renderSheet('Ordre des histoires sur la Lunii', close, body, footer);
+    }
 
     render() {
         const { t } = this.props;
-        let storagePercentage = null;
-        if (this.state.device.metadata) {
-            storagePercentage = (100.00 * this.state.device.metadata.storage.taken / this.state.device.metadata.storage.size).toFixed(0) + '%';
-        }
-        let defaultImage = 'data:image/png;base64,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';
+        const plugged = !!this.state.device.metadata;
+        const groups = this.state.library.packs || [];
+        const q = this.state.search.trim().toLowerCase();
+        const matches = (title) => !q || (title || '').toLowerCase().indexOf(q) !== -1;
+
+        const libraryUuids = new Set(groups.map(g => g.uuid));
+        const onDeviceCount = groups.filter(g => this.isOnDevice(g.uuid)).length;
+        const deviceOnly = (this.state.device.packs || []).filter(p => !libraryUuids.has(p.uuid));
+
+        const visibleGroups = groups
+            .filter(g => matches(g.packs[0].title || g.uuid))
+            .filter(g => this.state.filter === 'all'
+                || (this.state.filter === 'device' && this.isOnDevice(g.uuid))
+                || (this.state.filter === 'notDevice' && !this.isOnDevice(g.uuid)));
+        const visibleDeviceOnly = this.state.filter === 'notDevice' ? [] : deviceOnly.filter(p => matches(p.title || p.uuid));
+        const visibleOnDevice = visibleGroups.filter(g => this.isOnDevice(g.uuid));
+        const visibleNotOnDevice = visibleGroups.filter(g => !this.isOnDevice(g.uuid));
+
+        const filters = [
+            { key: 'all', label: 'Toutes', count: groups.length },
+            plugged && { key: 'device', label: 'Sur la Lunii', count: onDeviceCount },
+            plugged && { key: 'notDevice', label: 'Pas encore sur la Lunii', count: groups.length - onDeviceCount }
+        ].filter(Boolean);
+
         return (
-            <div className="pack-library">
+            <div className="sl-library"
+                 onDragOver={e => { e.preventDefault(); if (!this.state.dragOver) this.setState({ dragOver: true }); }}
+                 onDragLeave={e => { if (e.currentTarget === e.target) this.setState({ dragOver: false }); }}
+                 onDrop={this.onDropIntoLibrary}>
 
                 {this.state.showRemoveFromDeviceConfirmDialog &&
                 <Modal id="confirm-device-pack-remove"
-                       title={t('dialogs.library.removeFromDevice.title')}
-                       content={<p>{t('dialogs.library.removeFromDevice.content')}</p>}
+                       title="Retirer de la Lunii ?"
+                       content={<p>L'histoire sera effacée de la Lunii. Elle reste dans ta bibliothèque, tu pourras la renvoyer plus tard.</p>}
                        buttons={[
                            { label: t('dialogs.shared.no'), onClick: this.dismissRemoveFromDeviceConfirmDialog},
-                           { label: t('dialogs.shared.yes'), onClick: this.doRemovePackFromDevice}
+                           { label: 'Retirer', onClick: this.doRemovePackFromDevice}
                        ]}
                        onClose={this.dismissRemoveFromDeviceConfirmDialog}
                 />}
                 {this.state.showRemoveFromLibraryConfirmDialog &&
                 <Modal id="confirm-library-pack-remove"
-                       title={t('dialogs.library.removeFromLibrary.title')}
-                       content={<p>{t('dialogs.library.removeFromLibrary.content')}</p>}
+                       title="Supprimer de la bibliothèque ?"
+                       content={<p>{(this.state.removingFromLibrary || []).length > 1
+                           ? `Les ${this.state.removingFromLibrary.length} fichiers de cette histoire seront supprimés de ton ordinateur.`
+                           : 'Ce fichier sera supprimé de ton ordinateur.'} Ce qui est déjà sur la Lunii n'est pas touché.</p>}
                        buttons={[
                            { label: t('dialogs.shared.no'), onClick: this.dismissRemoveFromLibraryConfirmDialog},
-                           { label: t('dialogs.shared.yes'), onClick: this.doRemovePackFromLibrary}
+                           { label: 'Supprimer', onClick: this.doRemovePacksFromLibrary}
                        ]}
                        onClose={this.dismissRemoveFromLibraryConfirmDialog}
                 />}
@@ -371,182 +617,89 @@ class PackLibrary extends React.Component {
                 />}
                 {this.state.confirmConversionDialog.show &&
                 <Modal id="ask-confirm-conversion"
-                       title={t('dialogs.library.askConfirmConversion.title')}
-                       content={<div dangerouslySetInnerHTML={{__html: t('dialogs.library.askConfirmConversion.content')}} ></div>}
+                       title="Une version plus récente existe"
+                       content={<p>Cette histoire a été modifiée depuis sa dernière préparation pour la Lunii. Préparer et envoyer la nouvelle version ? (Non : envoie l'ancienne version.)</p>}
                        buttons={[
                            { label: t('dialogs.shared.no'), onClick: this.dismissConfirmConversionDialog(false)},
                            { label: t('dialogs.shared.yes'), onClick: this.dismissConfirmConversionDialog(true)}
                        ]}
-                       onClose={this.dismissConfirmConversionDialog(false)}
+                       onClose={() => this.setState({ confirmConversionDialog: { show: false, data: null } })}
                 />}
+                {this.state.details && this.renderDetails()}
+                {this.state.showDeviceInfo && this.renderDeviceInfo()}
+                {this.state.showReorder && this.renderReorder()}
 
-                {/* Device view, if plugged */}
-                {this.state.device.metadata && <div className="plugged-device">
-                    <div className="header">
-                        <h4>{t('library.device.title')}</h4>
-                        <div className="header-uuid" title={this.state.device.metadata.uuid}><strong>{t('library.device.uuid')}</strong> {this.state.device.metadata.uuid}</div>
-                        <div><strong>{t('library.device.serial')}</strong> {this.state.device.metadata.serial || '-'}</div>
-                        <div><strong>{t('library.device.firmware')}</strong> {this.state.device.metadata.firmware || '-'}</div>
-                        {this.state.device.metadata.error && <p><strong>DEVICE HAS ERRORS</strong></p>}
-                        <div className="progress">
-                            <div className="progress-bar" role="progressbar" style={{width: storagePercentage}} aria-valuenow={this.state.device.metadata.storage.taken} aria-valuemin="0" aria-valuemax={this.state.device.metadata.storage.size}>{storagePercentage}</div>
+                <div className="sl-container">
+                    {this.renderDeviceBar()}
+
+                    <div className="sl-toolbar">
+                        <div className="sl-search">
+                            <span className="sl-search-icon" aria-hidden="true">&#128269;</span>
+                            <input type="search"
+                                   placeholder="Rechercher une histoire"
+                                   value={this.state.search}
+                                   onChange={e => this.setState({ search: e.target.value })}/>
+                        </div>
+                        <div className="sl-filters" role="tablist">
+                            {filters.map(f => <button key={f.key}
+                                                      role="tab"
+                                                      aria-selected={this.state.filter === f.key}
+                                                      className={`sl-filter ${this.state.filter === f.key ? 'is-active' : ''}`}
+                                                      onClick={() => this.setState({ filter: f.key })}>
+                                {f.label}<span className="sl-filter-count">{f.count}</span>
+                            </button>)}
+                        </div>
+                        <div className="sl-toolbar-actions">
+                            <input type="file" id="upload" accept=".zip,.pack" style={{display: 'none'}} onChange={this.packAddFileSelected} />
+                            <button className="sl-btn sl-btn-secondary" onClick={this.showAddFileSelector}>+ Importer un pack</button>
+                            <MoreMenu items={[
+                                { icon: '✨', label: 'Créer un nouveau pack', onClick: () => this.props.createPackInEditor() },
+                                { icon: '📖', label: 'Ouvrir le pack d\'exemple', onClick: () => this.props.loadSampleInEditor() },
+                                this.state.library.metadata && { divider: true },
+                                this.state.library.metadata && { icon: '📁', label: 'Copier le chemin de la bibliothèque', hint: this.state.library.metadata.path, onClick: () => this.copyToClipboard(this.state.library.metadata.path) }
+                            ]}/>
                         </div>
                     </div>
-                    <div className="device-dropzone"
-                         onDrop={this.onDropPackIntoDevice}
-                         onDragOver={event => { event.preventDefault(); }}
-                         onDragLeave={event => {
-                             // Get the location of the dropzone
-                             var rect = event.target.closest('.device-dropzone').getBoundingClientRect();
-                             // Check whether the mouse coordinates are outside the dropzone rectangle
-                             if(event.clientX > rect.left + rect.width || event.clientX < rect.left || event.clientY > rect.top + rect.height || event.clientY < rect.top) {
-                                 console.log("Reset reorder to beforeReordering: %o", this.state.beforeReordering);
-                                 this.setState({
-                                     device: {
-                                         ...this.state.device,
-                                         packs: [...this.state.beforeReordering]
-                                     }
-                                 });
-                             }
-                         }}>
-                        {this.state.device.packs.length === 0 && <div className="empty">{t('library.device.empty')}</div>}
-                        {this.state.device.packs.length > 0 && <div className="pack-grid">
-                            {this.state.device.packs.map((pack,idx) =>
-                                <div key={pack.uuid}
-                                     draggable={true}
-                                     className={`pack-tile pack-${pack.format} ${this.isPackDraggable(pack) ? 'pack-draggable' : 'pack-not-draggable'} ${pack.nightModeAvailable && 'pack-night-mode'}`}
-                                     onDragStart={event => {
-                                         event.dataTransfer.setData("device-pack", JSON.stringify(pack));
-                                         this.setState({reordering: pack, beforeReordering: [...this.state.device.packs]});
-                                     }}
-                                     onDragEnter={event => {
-                                         let data = this.state.reordering;
-                                         if (data && data.uuid !== pack.uuid) {
-                                             let reordered = this.state.device.packs;
-                                             let draggedIndex = reordered.findIndex(p => p.uuid === data.uuid);
-                                             if (draggedIndex < idx) {
-                                                 // Going down, place dragged item right after the dragged-over pack
-                                                 reordered.splice(idx + 1, 0, reordered[draggedIndex]);
-                                                 reordered.splice(draggedIndex, 1);
-                                             }
-                                             if (draggedIndex > idx) {
-                                                 // Going up, place dragged item right before the dragged-over pack
-                                                 reordered.splice(idx, 0, reordered[draggedIndex]);
-                                                 reordered.splice(++draggedIndex, 1);
-                                             }
-                                             this.setState({
-                                                 device: {
-                                                     ...this.state.device,
-                                                     packs: reordered
-                                                 }
-                                             });
-                                         }
-                                     }}
-                                     onDragEnd={event => {
-                                         // Reorder on device only if order changed
-                                         if (this.state.beforeReordering.reduce((acc,p)=>acc+','+p.uuid, '') !== this.state.device.packs.reduce((acc,p)=>acc+','+p.uuid, '')) {
-                                             console.log("Order changed, reordering...");
-                                             let uuids = this.state.device.packs.map(p => p.uuid);
-                                             this.props.reorderOnDevice(uuids);
-                                         }
-                                         this.setState({reordering: null});
-                                     }}>
-                                    <div className="pack-format">
-                                        <span>{t(`library.format.${pack.format}`)}</span>
-                                    </div>
-                                    <div className="pack-thumb" title={pack.nightModeAvailable && t('library.nightMode')}>
-                                        <img src={pack.image || defaultImage} alt="" width="128" height="128" draggable={false} />
-                                        <div className="pack-version"><span>{`v${pack.version}`}</span></div>
-                                        {pack.official && <div className="pack-ribbon"><span>{t('library.official')}</span></div>}
-                                    </div>
-                                    <div className="pack-title">
-                                        <span title={pack.uuid}>{pack.title || pack.uuid}</span>&nbsp;
-                                    </div>
-                                    <div className="pack-actions">
-                                        <button className="pack-action" onClick={this.onRemovePackFromDevice(pack.uuid)}>
-                                            <span className="glyphicon glyphicon-trash"
-                                                  title={t('library.device.removePack')} />
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-                        </div>}
-                    </div>
-                </div>}
-                {/* Local pack library */}
-                {this.state.library && <div className="local-library">
-                    <div className="header">
-                        <h4>{t('library.local.title')}</h4>
-                        {this.state.library.metadata && <div><strong>{t('library.local.path')}</strong> {this.state.library.metadata.path}</div>}
-                        <input type="file" id="upload" style={{visibility: 'hidden', position: 'absolute'}} onChange={this.packAddFileSelected} />
-                        <span title={t('library.local.addPack')} className="btn btn-default glyphicon glyphicon-import" onClick={this.showAddFileSelector}/>
-                        <div className="editor-actions">
-                            <p><button className="library-action" onClick={this.onCreateNewPackInEditor}>{t('library.local.empty.link1')}</button> <button className="library-action" onClick={this.onOpenSamplePackInEditor}>{t('library.local.empty.link2')}</button> {t('library.local.empty.suffix')}</p>
+
+                    {groups.length === 0 && <div className="sl-empty">
+                        <div className="sl-empty-icon" aria-hidden="true">&#128218;</div>
+                        <h3>Ta bibliothèque est vide</h3>
+                        <p>Glisse un pack (.zip) ici, ou utilise « Importer un pack ».</p>
+                    </div>}
+
+                    {groups.length > 0 && visibleGroups.length === 0 && visibleDeviceOnly.length === 0 && <div className="sl-empty sl-empty-small">
+                        <p>Aucune histoire ne correspond.</p>
+                    </div>}
+
+                    {!plugged && visibleGroups.length > 0 && <div className="sl-grid">
+                        {visibleGroups.map(g => this.renderGroupCard(g))}
+                    </div>}
+
+                    {plugged && visibleOnDevice.length > 0 && <>
+                        <h2 className="sl-section-title sl-section-first">Sur la Lunii <span className="sl-filter-count">{visibleOnDevice.length}</span></h2>
+                        <div className="sl-grid">
+                            {visibleOnDevice.map(g => this.renderGroupCard(g))}
                         </div>
-                    </div>
-                    <div className="library-dropzone"
-                         onDrop={this.onDropPackIntoLibrary}
-                         onDragOver={event => { event.preventDefault(); }}>
-                        {this.state.library.packs.length === 0 && <div className="empty">
-                            <p>{t('library.local.empty.header')}</p>
-                        </div>}
-                        {this.state.library.packs.length > 0 && <div className="pack-grid">
-                            {this.state.library.packs.map(group =>
-                                <div key={group.uuid}
-                                     title={group.uuid}
-                                     draggable={this.isPackDraggable(group.packs[0])}
-                                     className={`pack-tile ${this.isPackDraggable(group.packs[0]) ? 'pack-draggable' : 'pack-not-draggable'} ${group.packs[0].nightModeAvailable && 'pack-night-mode'}`}
-                                     onDragStart={event => {
-                                         // Drag first pack
-                                         event.dataTransfer.setDragImage(event.target.querySelector('.pack-entry'), 0, 0);
-                                         event.dataTransfer.setData("local-library-pack", JSON.stringify(group));
-                                     }}>
-                                    <div className="pack-left">
-                                        <div className="pack-title">
-                                            <span>{group.packs[0].title || group.uuid}</span>&nbsp;
-                                        </div>
-                                        <div className="pack-thumb" title={group.packs[0].nightModeAvailable && t('library.nightMode')}>
-                                            <img src={group.packs[0].image || defaultImage} alt="" width="128" height="128" draggable={false} />
-                                            {group.packs[0].official && <div className="pack-ribbon"><span>{t('library.official')}</span></div>}
-                                        </div>
-                                    </div>
-                                    <div className="pack-right">
-                                        {group.packs.map((p,idx) => {
-                                            return <div key={p.path} title={p.path} className={`pack-entry pack-${p.format} ${idx === 0 && 'latest'}`}>
-                                                <div className="pack-filename">
-                                                    {p.format === 'archive' && <span role="img" aria-label="archive" title={t('library.format.archive')}>&#x1f5dc;</span>}
-                                                    {p.format === 'raw' && <span role="img" aria-label="raw" title={t('library.format.raw')}>&#x1f4e6;</span>}
-                                                    {p.format === 'fs' && <span role="img" aria-label="fs" title={t('library.format.fs')}>&#x1f4c2;</span>}
-                                                    {p.path}
-                                                </div>
-                                                <div className="pack-version"><span>{`v${p.version}`}</span></div>
-                                                <div className="pack-actions">
-                                                    {p.format !== 'archive' && <button className="pack-action" onClick={this.onConvertLibraryPack(p, 'archive')}>
-                                                        <span role="img" aria-label="to archive" title={t('library.local.convertPackToArchive')}>&#10132;&#x1f5dc;</span>
-                                                    </button>}
-                                                    {p.format === 'archive' && <>
-                                                        <button className="pack-action" onClick={this.onEditLibraryPack(p)}>
-                                                            <span className="glyphicon glyphicon-edit" title={t('library.local.editPack')} />
-                                                        </button>
-                                                        <button className="pack-action" onClick={this.onConvertLibraryPack(p, 'raw')}>
-                                                            <span role="img" aria-label="to raw" title={t('library.local.convertPackToRaw')}>&#10132;&#x1f4e6;</span>
-                                                        </button>
-                                                        <button className="pack-action" onClick={this.onConvertLibraryPack(p, 'fs')}>
-                                                            <span role="img" aria-label="to fs" title={t('library.local.convertPackToFs')}>&#10132;&#x1f4c2;</span>
-                                                        </button>
-                                                    </>}
-                                                    <button className="pack-action" onClick={this.onRemovePackFromLibrary(p.path)}>
-                                                        <span className="glyphicon glyphicon-trash" title={t('library.local.removePack')} />
-                                                    </button>
-                                                </div>
-                                            </div>;
-                                        })}
-                                    </div>
-                                </div>
-                            )}
-                        </div>}
-                    </div>
-                </div>}
+                    </>}
+
+                    {plugged && visibleDeviceOnly.length > 0 && <>
+                        <h2 className="sl-section-title">Seulement sur la Lunii <span className="sl-filter-count">{visibleDeviceOnly.length}</span></h2>
+                        <p className="sl-section-sub">Ces histoires sont sur la Lunii mais pas dans ta bibliothèque. Tu peux les récupérer sur l'ordinateur (sauf les packs officiels, qui sont protégés).</p>
+                        <div className="sl-grid">
+                            {visibleDeviceOnly.map(p => this.renderDeviceOnlyCard(p))}
+                        </div>
+                    </>}
+
+                    {plugged && visibleNotOnDevice.length > 0 && <>
+                        <h2 className="sl-section-title">Pas encore sur la Lunii <span className="sl-filter-count">{visibleNotOnDevice.length}</span></h2>
+                        <p className="sl-section-sub">Ces histoires sont dans ta bibliothèque. Clique sur « Envoyer sur la Lunii » pour les ajouter.</p>
+                        <div className="sl-grid">
+                            {visibleNotOnDevice.map(g => this.renderGroupCard(g))}
+                        </div>
+                    </>}
+                </div>
+
+                {this.state.dragOver && <div className="sl-dropzone-hint">Dépose le pack pour l'ajouter à la bibliothèque</div>}
             </div>
         );
     }
