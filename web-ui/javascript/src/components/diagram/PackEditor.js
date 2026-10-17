@@ -24,6 +24,7 @@ import PackDiagramWidget from "./widgets/PackDiagramWidget";
 import FixedZoomCanvasAction from "./actions/FixedZoomCanvasAction";
 import IssueReportToast from "../IssueReportToast";
 import Modal from "../Modal";
+import MoreMenu from "../MoreMenu";
 import {generateFilename} from "../../utils/packs";
 import {writeToArchive} from "../../utils/writer";
 import {
@@ -33,6 +34,7 @@ import {
 } from "../../actions";
 
 import './PackEditor.css';
+import './EditorModern.css';
 
 
 class PackEditor extends React.Component {
@@ -193,14 +195,33 @@ class PackEditor extends React.Component {
                        ]}
                        onClose={this.dismissSaveConfirmDialog}
                 />}
-                <div className="controls">
+                {this.state.showClearConfirm &&
+                <Modal id="confirm-editor-clear"
+                       title="Tout effacer ?"
+                       content={<p>Le pack en cours d'édition sera vidé. Pense à l'enregistrer d'abord si tu veux le garder.</p>}
+                       buttons={[
+                           { label: t('dialogs.shared.no'), onClick: () => this.setState({ showClearConfirm: false }) },
+                           { label: 'Tout effacer', onClick: () => { this.setState({ showClearConfirm: false }); this.clear(); } }
+                       ]}
+                       onClose={() => this.setState({ showClearConfirm: false })}
+                />}
+                <div className="ed-topbar">
                     {/* eslint-disable-next-line */}
                     <a id="download" style={{visibility: 'hidden', position: 'absolute'}} />
-                    <span title={t('editor.actions.save')} className="btn btn-default glyphicon glyphicon-floppy-disk" onClick={this.savePackToLibrary}/>
-                    <input type="file" id="upload" style={{visibility: 'hidden', position: 'absolute'}} onChange={this.packImportFileSelected} />
-                    <span title={t('editor.actions.import')} className="btn btn-default glyphicon glyphicon-import" onClick={this.showImportFileSelector}/>
-                    <span title={t('editor.actions.export')} className="btn btn-default glyphicon glyphicon-export" onClick={this.exportPack}/>
-                    <span title={t('editor.actions.clear')} className="btn btn-default glyphicon glyphicon-trash" onClick={this.clear}/>
+                    <input type="file" id="upload" accept=".zip" style={{display: 'none'}} onChange={this.packImportFileSelected} />
+                    <div className="ed-topbar-text">
+                        <div className="ed-topbar-title">Éditeur de pack</div>
+                        <div className="ed-topbar-sub">Glisse des blocs depuis la gauche, relie-les, puis enregistre.</div>
+                    </div>
+                    <button className="sl-btn sl-btn-primary" onClick={this.savePackToLibrary} title="Ajouter ou mettre à jour ce pack dans la bibliothèque">
+                        Enregistrer dans la bibliothèque
+                    </button>
+                    <MoreMenu items={[
+                        { icon: '\uD83D\uDCE5', label: 'Ouvrir un pack (.zip)…', onClick: this.showImportFileSelector },
+                        { icon: '\uD83D\uDCBE', label: 'Télécharger le pack (.zip)', onClick: this.exportPack },
+                        { divider: true },
+                        { icon: '\u2728', label: 'Nouveau pack (tout effacer)', danger: true, onClick: () => this.setState({ showClearConfirm: true }) }
+                    ]}/>
                 </div>
 
                 <PackDiagramWidget diagramEngine={this.state.engine}/>

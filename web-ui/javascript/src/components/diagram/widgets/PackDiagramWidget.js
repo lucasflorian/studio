@@ -21,6 +21,7 @@ import StoryNodeModel from "../models/StoryNodeModel";
 import TrayWidget from "./TrayWidget";
 import TrayItemWidget from "./TrayItemWidget";
 import Modal from "../../Modal";
+import MoreMenu from "../../MoreMenu";
 import {setEditorDiagram, setEditorFilename, setDiagramErrors} from "../../../actions";
 import {generateFilename} from "../../../utils/packs";
 
@@ -401,62 +402,73 @@ class PackDiagramWidget extends React.Component {
             {this.state.showHelpDialog && this.renderHelpDialog()}
 
             {/* Metadata */}
-            <div className="metadata">
-                <div className="metadata-section vertical">
-                    <div>
-                        <label htmlFor="pack-title">{t('editor.metadata.title')}</label>
-                        <input id="pack-title" type="text" value={this.getDiagramModel().title || ''} onChange={this.changeTitle} onFocus={this.onInputFocus} onBlur={this.checkFilename}/>
-                    </div>
-                    <div>
-                        <label htmlFor="pack-version">{t('editor.metadata.version')}</label>
-                        <input id="pack-version" type="number" value={this.getDiagramModel().version || ''} onChange={this.changeVersion} onFocus={this.onInputFocus} onBlur={this.checkFilename}/>
-                    </div>
-                    <div>
-                        <label htmlFor="pack-filename">{t('editor.metadata.filename')}</label>
-                        <input id="pack-filename" type="text" value={this.props.editor.filename || ''} onChange={this.changeFilename} onFocus={this.onInputFocus} onBlur={this.onInputBlur}/>
-                    </div>
-                    <div>
-                        <label>{t('editor.metadata.uuid')}</label>
-                        <span>{this.props.diagramEngine.getModel() && this.props.diagramEngine.getModel().getEntryPoint() && this.props.diagramEngine.getModel().getEntryPoint().getUuid()}</span>
-                    </div>
+            <div className="ed-meta">
+                <input type="file" id="pack-thumb" accept="image/*" style={{display: 'none'}} onChange={this.changeThumbnail} />
+                <button className="ed-thumb" onClick={this.showThumbnailSelector} title="Changer l'image de couverture">
+                    <img src={this.getDiagramModel().thumbnail || defaultImage} alt="" />
+                    <span className="ed-thumb-hint">Changer l'image</span>
+                </button>
+                <div className="ed-meta-main">
+                    <input id="pack-title" className="ed-title-input" type="text" placeholder="Titre du pack"
+                           value={this.getDiagramModel().title || ''} onChange={this.changeTitle} onFocus={this.onInputFocus} onBlur={this.checkFilename}/>
+                    <textarea id="pack-description" className="ed-desc-input" placeholder="Description (facultatif)"
+                              value={this.getDiagramModel().description || ''} onChange={this.changeDescription} onFocus={this.onInputFocus} onBlur={this.onInputBlur}/>
+                    {this.state.showAdvanced && <div className="ed-advanced">
+                        <label className="ed-field">
+                            <span>{t('editor.metadata.version')}</span>
+                            <input id="pack-version" type="number" value={this.getDiagramModel().version || ''} onChange={this.changeVersion} onFocus={this.onInputFocus} onBlur={this.checkFilename}/>
+                        </label>
+                        <label className="ed-field ed-field-wide">
+                            <span>{t('editor.metadata.filename')}</span>
+                            <input id="pack-filename" type="text" value={this.props.editor.filename || ''} onChange={this.changeFilename} onFocus={this.onInputFocus} onBlur={this.onInputBlur}/>
+                        </label>
+                        <div className="ed-field ed-field-wide">
+                            <span>{t('editor.metadata.uuid')}</span>
+                            <code>{this.props.diagramEngine.getModel() && this.props.diagramEngine.getModel().getEntryPoint() && this.props.diagramEngine.getModel().getEntryPoint().getUuid()}</code>
+                        </div>
+                    </div>}
                 </div>
-                <div className="metadata-section vertical">
-                    <div>
-                        <label htmlFor="pack-description">{t('editor.metadata.desc')}</label>
-                        <textarea id="pack-description" value={this.getDiagramModel().description || ''} style={{display: 'inline-block'}} onChange={this.changeDescription} onFocus={this.onInputFocus} onBlur={this.onInputBlur}/>
-                    </div>
-                    <div title={t('editor.metadata.nightModeWarning')}>
-                        <label htmlFor="pack-night-mode">{t('editor.metadata.nightMode')}</label>
-                        <Switch onChange={this.changeNightModeAvailable} checked={this.getDiagramModel().nightModeAvailable} height={15} width={35} handleDiameter={20} boxShadow="0px 1px 5px rgba(0, 0, 0, 0.6)" activeBoxShadow="0px 0px 1px 10px rgba(0, 0, 0, 0.2)" uncheckedIcon={false} checkedIcon={false} className="metadata-night-mode" />
-                    </div>
-                </div>
-                <div className="metadata-section right">
-                    <label htmlFor="pack-thumb">{t('editor.metadata.thumb')}</label>
-                    <input type="file" id="pack-thumb" style={{visibility: 'hidden', position: 'absolute'}} onChange={this.changeThumbnail} />
-                    <img src={this.getDiagramModel().thumbnail || defaultImage} alt="" width="120" height="120" onClick={this.showThumbnailSelector} />
+                <div className="ed-meta-side">
+                    <label className="ed-switch" title={t('editor.metadata.nightModeWarning')}>
+                        <Switch onChange={this.changeNightModeAvailable} checked={!!this.getDiagramModel().nightModeAvailable} height={18} width={34} handleDiameter={14} onColor="#6d5dfc" uncheckedIcon={false} checkedIcon={false} />
+                        <span>Mode nuit</span>
+                    </label>
+                    <button className="sl-link" onClick={() => this.setState({ showAdvanced: !this.state.showAdvanced })}>
+                        {this.state.showAdvanced ? 'Masquer les options avancées' : 'Options avancées'}
+                    </button>
                 </div>
             </div>
 
             <div className="content">
                 {/* Node tray */}
                 <TrayWidget>
+                    <div className="ed-tray-title">Blocs à glisser</div>
                     <TrayItemWidget model={{ type: "cover" }} className="tray-item-cover" helpClicked={this.showHelpDialog('cover')}>
-                        <span className="glyphicon glyphicon-book"/> {t('editor.tray.cover')}
+                        <span className="ed-tray-icon" aria-hidden="true">&#128214;</span>
+                        <span className="ed-tray-text"><strong>{t('editor.tray.cover')}</strong><small>Le début du pack</small></span>
                     </TrayItemWidget>
                     <TrayItemWidget model={{ type: "menu" }} className="tray-item-menu" helpClicked={this.showHelpDialog('menu')}>
-                        <span className="glyphicon glyphicon-question-sign"/> {t('editor.tray.menu')}
+                        <span className="ed-tray-icon" aria-hidden="true">&#10067;</span>
+                        <span className="ed-tray-text"><strong>{t('editor.tray.menu')}</strong><small>Un choix avec la molette</small></span>
                     </TrayItemWidget>
                     <TrayItemWidget model={{ type: "story" }} className="tray-item-story" helpClicked={this.showHelpDialog('story')}>
-                        <span className="glyphicon glyphicon-headphones"/> {t('editor.tray.story')}
+                        <span className="ed-tray-icon" aria-hidden="true">&#127911;</span>
+                        <span className="ed-tray-text"><strong>{t('editor.tray.story')}</strong><small>Une histoire ou une chanson</small></span>
                     </TrayItemWidget>
-                    <hr />
-                    <TrayItemWidget model={{ type: "stage" }} className="tray-item-stage" helpClicked={this.showHelpDialog('stage')}>
-                        {t('editor.tray.stage')}
-                    </TrayItemWidget>
-                    <TrayItemWidget model={{ type: "action" }} className="tray-item-action" helpClicked={this.showHelpDialog('action')}>
-                        {t('editor.tray.action')}
-                    </TrayItemWidget>
-                    <button onClick={this.showHelpDialog('diagram')} title={t('editor.tray.help')} className="help glyphicon glyphicon-info-sign"/>
+                    <details className="ed-tray-advanced">
+                        <summary>Blocs avancés</summary>
+                        <TrayItemWidget model={{ type: "stage" }} className="tray-item-stage" helpClicked={this.showHelpDialog('stage')}>
+                            <span className="ed-tray-icon" aria-hidden="true">&#9635;</span>
+                            <span className="ed-tray-text"><strong>{t('editor.tray.stage')}</strong></span>
+                        </TrayItemWidget>
+                        <TrayItemWidget model={{ type: "action" }} className="tray-item-action" helpClicked={this.showHelpDialog('action')}>
+                            <span className="ed-tray-icon" aria-hidden="true">&#8644;</span>
+                            <span className="ed-tray-text"><strong>{t('editor.tray.action')}</strong></span>
+                        </TrayItemWidget>
+                    </details>
+                    <button onClick={this.showHelpDialog('diagram')} className="ed-tray-help">
+                        <span aria-hidden="true">&#9432;</span> Comment ça marche ?
+                    </button>
                 </TrayWidget>
 
                 {/* Diagram */}
@@ -465,23 +477,15 @@ class PackDiagramWidget extends React.Component {
                      onDragOver={event => { event.preventDefault(); }}>
                     <CanvasWidget className={`storm-diagrams-canvas ${this.state.displayForwardWorkflow ? '' : 'hide-forward-workflow'} ${this.state.displayReturningWorkflow ? '' : 'hide-returning-workflow'}`} engine={this.props.diagramEngine}/>
                     {/* Tools */}
-                    <div className="toolbelt">
-                        <div className="tool"><span title={t('editor.tools.zoom')} className="btn btn-default glyphicon glyphicon-fullscreen" onClick={this.zoomToFit}/></div>
-                        <div className="tool"><span title={t('editor.tools.clone')} className="btn btn-default glyphicon glyphicon-duplicate" onClick={this.cloneSelection}/></div>
-                        <div className="tool layers">
-                            <span title={t('editor.tools.filterLayers')} className="btn btn-default glyphicon glyphicon-filter"/>
-                            <ul>
-                                <li>
-                                    <label htmlFor="display-forward-workflow-checkbox">{t('editor.tools.displayForwardWorkflow')}</label>
-                                    <input type="checkbox" id="display-forward-workflow-checkbox" checked={this.state.displayForwardWorkflow} onChange={this.toggleDisplayForwardWorkflow} />
-                                </li>
-                                <li>
-                                    <label htmlFor="display-returning-workflow-checkbox">{t('editor.tools.displayReturningWorkflow')}</label>
-                                    <input type="checkbox" id="display-returning-workflow-checkbox" checked={this.state.displayReturningWorkflow} onChange={this.toggleDisplayReturningWorkflow} />
-                                </li>
-                            </ul>
-                        </div>
-                        <div className="tool"><span title={t('editor.tools.verify')} className="btn btn-default glyphicon glyphicon-ok-sign" onClick={this.verifyDiagram}/></div>
+                    <div className="ed-toolbelt">
+                        <button className="ed-tool" title={t('editor.tools.zoom')} onClick={this.zoomToFit}><span className="glyphicon glyphicon-fullscreen"/></button>
+                        <button className="ed-tool" title={t('editor.tools.clone')} onClick={this.cloneSelection}><span className="glyphicon glyphicon-duplicate"/></button>
+                        <button className="ed-tool ed-tool-check" title={t('editor.tools.verify')} onClick={this.verifyDiagram}><span className="glyphicon glyphicon-ok"/> Vérifier</button>
+                        <MoreMenu items={[
+                            { header: 'Afficher les liens' },
+                            { icon: this.state.displayForwardWorkflow ? '\u2611\uFE0F' : '\u2B1C', label: t('editor.tools.displayForwardWorkflow'), onClick: this.toggleDisplayForwardWorkflow },
+                            { icon: this.state.displayReturningWorkflow ? '\u2611\uFE0F' : '\u2B1C', label: t('editor.tools.displayReturningWorkflow'), onClick: this.toggleDisplayReturningWorkflow }
+                        ]}/>
                     </div>
                 </div>}
             </div>
