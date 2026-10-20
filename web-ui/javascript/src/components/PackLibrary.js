@@ -362,8 +362,6 @@ class PackLibrary extends React.Component {
             action = <button className="sl-btn sl-btn-primary" disabled><span className="sl-spinner"/>Envoi en cours…</button>;
         } else if (onDevice) {
             action = <div className="sl-on-device"><span className="sl-check">&#10003;</span>Sur la Lunii</div>;
-        } else if (official) {
-            action = <div className="sl-muted-note" title="Les packs officiels s'installent avec l'application Luniistore">Pack officiel</div>;
         } else {
             action = <button className="sl-btn sl-btn-primary"
                              disabled={!plugged}
